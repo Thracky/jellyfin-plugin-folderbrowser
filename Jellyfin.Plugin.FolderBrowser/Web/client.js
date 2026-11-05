@@ -288,7 +288,7 @@
     function loadChildren(folderId) {
         return api().getItems(api().getCurrentUserId(), {
             ParentId: folderId,
-            Fields: 'Path',
+            Fields: 'Path,CanDelete',
             EnableImageTypes: 'Primary',
             ImageTypeLimit: 1,
             EnableUserData: false,
@@ -432,7 +432,10 @@
             : '';
         var buttons = iconButton('play', 'play_arrow', 'Play') +
             iconButton('queue', 'playlist_add', 'Add to queue') +
-            (item.Type === 'MusicAlbum' ? iconButton('album', 'album', 'Open album page') : '');
+            (item.Type === 'MusicAlbum' ? iconButton('album', 'album', 'Open album page') : '') +
+            (item.Type === 'MusicAlbum' && item.CanDelete && folderSorter()
+                ? iconButton('sort', 'drive_file_move', 'Move or delete folder (Folder Sorter)')
+                : '');
         return rowHtml('data-kind="folder" data-id="' + esc(item.Id) + '"', lead, displayName(item), secondary, buttons);
     }
 
@@ -470,7 +473,16 @@
         var id = row.getAttribute('data-id');
 
         if (kind === 'folder') {
-            if (action === 'album') {
+            if (action === 'sort') {
+                var sorter = folderSorter();
+                if (sorter) {
+                    sorter.showMenu(button, id).then(function (result) {
+                        if (result === 'done') {
+                            rerender();
+                        }
+                    });
+                }
+            } else if (action === 'album') {
                 location.hash = '#/details?id=' + encodeURIComponent(id) + '&serverId=' + encodeURIComponent(api().serverId());
             } else if (action === 'play') {
                 play(id, { mode: 'PlayNow' });
@@ -546,6 +558,22 @@
         }
     }
 
+    // Folder Sorter is optional: its script publishes window.FolderSorter. Without it the button is not shown.
+    function folderSorter() {
+        var sorter = window.FolderSorter;
+        return sorter && typeof sorter.showMenu === 'function' ? sorter : null;
+    }
+
+    // Draws the current folder again, e.g. after a release was moved out of it.
+    function rerender() {
+        document.querySelectorAll('.' + ROOT_CLASS).forEach(function (root) {
+            root.removeAttribute('data-key');
+        });
+        scheduleSync();
+    }
+
+    // Folder Sorter's script may load after a folder was already drawn.
+    document.addEventListener('foldersorter:ready', rerender);
     window.addEventListener('hashchange', scheduleSync);
     window.addEventListener('popstate', scheduleSync);
     new MutationObserver(scheduleSync).observe(document.body || document.documentElement, { childList: true, subtree: true });

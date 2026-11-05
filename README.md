@@ -24,11 +24,17 @@ Target: **Jellyfin 12.2** (server and the bundled web client). No fork of jellyf
   | Where | Actions |
   |---|---|
   | Toolbar | Play all, Shuffle and Add to queue for the current folder |
-  | Folder rows | Play, Add to queue; albums also have **Open album page** |
+  | Folder rows | Play, Add to queue; albums also have **Open album page**, plus **Move or delete folder** when Folder Sorter is installed |
   | Track rows | Click to play the folder from that track; Add to queue |
 
-- **Works with Folder Sorter:** the album page's ⋮ menu still has Folder Sorter's *Move to …* / *Delete
-  folder* entries.
+- **Optional Folder Sorter integration:** if the
+  [Folder Sorter](../jellyfin-plugin-foldersorter) plugin is installed, album rows you are allowed to delete get
+  a **Move or delete folder** button (`drive_file_move` icon). It opens Folder Sorter's *Move to …* /
+  *Delete folder* menu, and the list refreshes after a successful move or delete.
+  - Without Folder Sorter the button is simply not shown; nothing else changes.
+  - The button is only on album rows. Folder Sorter works on whole releases, so it isn't offered for plain
+    folders, disc/bonus subfolders or single tracks.
+  - The album page's ⋮ menu also has Folder Sorter's entries, as everywhere else.
 
 ## How it works
 
@@ -179,5 +185,4 @@ While the folder view is open, the library's own content and toolbar are hidden 
   - Starting from a track beyond the 300th queues from that track onward.
 - **Library root spanning several media folders:** the root level shows the merged contents of all of them.
 - **Only the music library view gets a Folders entry.** The legacy layout isn't supported.
-- **No ⋮ item menu on the folder rows.** Use **Open album page** to get the album's ⋮ menu, including
-  Folder Sorter's entries.
+- **No ⋮ item menu on the folder rows.** Use **Open album page** to get the album's full ⋮ menu.
