@@ -36,7 +36,7 @@
     // sub: '/'-separated folder below the item's folder. Jellyfin models an album as one item whose tracks are
     // all direct children, even when they sit in "Disc 1/", "Bonus/" and so on, so those folders are rebuilt
     // from the track paths and addressed by item id + relative path.
-    function openFolder(folderId, sub) {
+    function folderHash(folderId, sub) {
         var route = currentRoute();
         var params = route ? route.params : new URLSearchParams();
         params.set(PARAM, folderId);
@@ -45,7 +45,16 @@
         } else {
             params.delete('sub');
         }
-        location.hash = hashFor(params);
+        return hashFor(params);
+    }
+
+    function openFolder(folderId, sub) {
+        location.hash = folderHash(folderId, sub);
+    }
+
+    // Like openFolder, but replaces the current history entry (used when the shown folder no longer exists).
+    function replaceFolder(folderId, sub) {
+        location.replace(folderHash(folderId, sub));
     }
 
     function leaveFolders() {
@@ -130,7 +139,17 @@
         '.folderbrowser-title { display: flex; align-items: center; gap: .1em; font-size: 1.6em; background: none; border: 0;' +
         ' color: inherit; cursor: pointer; padding: .1em .3em; border-radius: .2em; font-family: inherit; }' +
         '.folderbrowser-title:hover { background: rgba(128,128,128,.2); }' +
-        '.folderbrowser-actions { display: flex; gap: .3em; margin-left: auto; }' +
+        '.folderbrowser-actions, .folderbrowser-selection { display: flex; align-items: center; gap: .3em; margin-left: auto; }' +
+        '.folderbrowser-toolbar.has-selection .folderbrowser-actions { display: none; }' +
+        '.folderbrowser-toolbar:not(.has-selection) .folderbrowser-selection { display: none; }' +
+        '.folderbrowser-count { margin-right: .5em; opacity: .9; }' +
+        '.folderbrowser-batch { display: flex; align-items: center; gap: .3em; background: none; border: 0; color: inherit;' +
+        ' cursor: pointer; font-family: inherit; font-size: inherit; padding: .4em .7em; border-radius: .2em; }' +
+        '.folderbrowser-batch:hover { background: rgba(128,128,128,.2); }' +
+        '.folderbrowser-check { width: 1.2em; height: 1.2em; margin: 0 1em 0 .2em; flex-shrink: 0; cursor: pointer; }' +
+        '.folderbrowser-check-spacer { width: 1.2em; margin: 0 1em 0 .2em; flex-shrink: 0; }' +
+        '.folderbrowser-row.selected { background: rgba(128,128,128,.15); }' +
+        '.folderbrowser-toolbar:not(.can-select) .folderbrowser-selectall-idle { display: none; }' +
         '.folderbrowser-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .2em; margin: 0 0 .75em .3em; opacity: .9; }' +
         '.folderbrowser-crumbs a { color: inherit; cursor: pointer; text-decoration: none; }' +
         '.folderbrowser-crumbs a:hover { text-decoration: underline; }' +
@@ -234,8 +253,12 @@
             root.setAttribute('data-key', key);
             root.setAttribute('data-folder', folderId);
             root.setAttribute('data-sub', sub);
-            render(root, folderId, libraryId, sub);
+            root.setAttribute('data-library', libraryId);
+            selection = {};
+            lastChecked = null;
+            render(root, folderId, libraryId, sub, false);
         }
+        updateSelectionUi();
     }
 
     function ensureToolbar() {
@@ -267,7 +290,98 @@
             play(folderId, { mode: 'PlayNow', shuffle: true, subPath: sub });
         } else if (action === 'queue') {
             play(folderId, { mode: 'PlayLast', subPath: sub }, 'Added to queue');
+        } else if (action === 'batch') {
+            sortFolders(button, selectedIds());
+        } else if (action === 'selectall') {
+            document.querySelectorAll('.' + ROOT_CLASS + ' .folderbrowser-row[data-selectable]').forEach(function (row) {
+                selection[row.getAttribute('data-id')] = true;
+            });
+            updateSelectionUi();
+        } else if (action === 'clear') {
+            selection = {};
+            lastChecked = null;
+            updateSelectionUi();
         }
+    }
+
+    // ---------- selection (needs Folder Sorter) ----------
+
+    var selection = {}; // album id -> true, for the folder currently shown
+    var lastChecked = null; // id of the last row ticked, for shift-click ranges
+
+    function selectedIds() {
+        return Object.keys(selection);
+    }
+
+    function updateSelectionUi() {
+        var rows = document.querySelectorAll('.' + ROOT_CLASS + ' .folderbrowser-row[data-selectable]');
+        var present = {};
+        rows.forEach(function (row) {
+            var id = row.getAttribute('data-id');
+            present[id] = true;
+            var checked = selection[id] === true;
+            row.classList.toggle('selected', checked);
+            var box = row.querySelector('.folderbrowser-check');
+            if (box) {
+                box.checked = checked;
+            }
+        });
+        // Drop selections whose rows are gone (moved, deleted, or no longer listed).
+        Object.keys(selection).forEach(function (id) {
+            if (!present[id]) {
+                delete selection[id];
+            }
+        });
+
+        var count = selectedIds().length;
+        var toolbar = document.querySelector('.folderbrowser-toolbar');
+        if (toolbar) {
+            toolbar.classList.toggle('has-selection', count > 0);
+            toolbar.classList.toggle('can-select', rows.length > 0);
+            toolbar.querySelector('.folderbrowser-count').textContent = count + ' selected';
+        }
+    }
+
+    function toggleSelection(row, checked, range) {
+        var id = row.getAttribute('data-id');
+        if (range && lastChecked) {
+            var rows = Array.prototype.slice.call(document.querySelectorAll('.' + ROOT_CLASS + ' .folderbrowser-row[data-selectable]'));
+            var ids = rows.map(function (r) { return r.getAttribute('data-id'); });
+            var from = ids.indexOf(lastChecked);
+            var to = ids.indexOf(id);
+            if (from >= 0 && to >= 0) {
+                ids.slice(Math.min(from, to), Math.max(from, to) + 1).forEach(function (rangeId) {
+                    if (checked) {
+                        selection[rangeId] = true;
+                    } else {
+                        delete selection[rangeId];
+                    }
+                });
+            }
+        } else if (checked) {
+            selection[id] = true;
+        } else {
+            delete selection[id];
+        }
+        lastChecked = id;
+        updateSelectionUi();
+    }
+
+    function sortFolders(anchor, ids) {
+        var sorter = folderSorter();
+        if (!sorter || !ids.length) {
+            return;
+        }
+        sorter.showMenu(anchor, ids.length === 1 ? ids[0] : ids).then(function (result) {
+            if (!result) {
+                return;
+            }
+            // Folder Sorter 2 reports which ids were handled; anything else counts as "something changed".
+            if (result.succeeded) {
+                result.succeeded.forEach(function (id) { delete selection[id]; });
+            }
+            refresh();
+        });
     }
 
     function loadAncestors(folderId, libraryId) {
@@ -336,10 +450,14 @@
         };
     }
 
-    function render(root, folderId, libraryId, sub) {
+    // refresh: redraw the folder in place (keeps the current rows on screen until the new ones are ready, so
+    // the scroll position stays where it was) and go up a level if the folder itself is gone.
+    function render(root, folderId, libraryId, sub, refresh) {
         var token = ++renderToken;
-        root.innerHTML = '<div class="folderbrowser-crumbs"></div>' +
-            '<div class="folderbrowser-list"><div class="folderbrowser-empty">Loading…</div></div>';
+        if (!refresh) {
+            root.innerHTML = '<div class="folderbrowser-crumbs"></div>' +
+                '<div class="folderbrowser-list"><div class="folderbrowser-empty">Loading…</div></div>';
+        }
 
         var uid = api().getCurrentUserId();
         Promise.all([
@@ -382,19 +500,39 @@
             tracks.sort(function (a, b) { return collator.compare(displayName(a), displayName(b)); });
             folders.sort(function (a, b) { return collator.compare(a.name, b.name); });
 
+            var selectable = !!folderSorter() && folders.some(function (f) { return f.item && isSortable(f.item); });
             var html = tracks.map(trackRowHtml).join('') + folders.map(function (f) {
-                return f.item ? folderRowHtml(f.item) : subfolderRowHtml(f.sub, subParts.concat(f.sub.name).join('/'));
+                return f.item
+                    ? folderRowHtml(f.item, selectable)
+                    : subfolderRowHtml(f.sub, subParts.concat(f.sub.name).join('/'), selectable);
             }).join('');
             root.querySelector('.folderbrowser-list').innerHTML = html || '<div class="folderbrowser-empty">This folder is empty.</div>';
+            updateSelectionUi();
         }).catch(function (err) {
             if (token !== renderToken) {
                 return;
+            }
+            if (refresh && err && err.status === 404) {
+                // The folder was emptied and removed by the last move/delete: show its parent instead.
+                var crumbsLinks = root.querySelectorAll('.folderbrowser-crumbs a[data-crumb]');
+                var parent = crumbsLinks[crumbsLinks.length - 1];
+                if (parent) {
+                    replaceFolder(parent.getAttribute('data-crumb'), parent.getAttribute('data-crumb-sub'));
+                    return;
+                }
             }
             errorText(err).then(function (text) {
                 root.querySelector('.folderbrowser-list').innerHTML =
                     '<div class="folderbrowser-empty">Could not load this folder: ' + esc(text) + '</div>';
             });
         });
+    }
+
+    function refresh() {
+        var root = document.querySelector('.' + ROOT_CLASS);
+        if (root && root.getAttribute('data-key')) {
+            render(root, root.getAttribute('data-folder'), root.getAttribute('data-library'), root.getAttribute('data-sub') || '', true);
+        }
     }
 
     function toolbarHtml() {
@@ -404,6 +542,14 @@
             iconButton('play', 'play_arrow', 'Play all') +
             iconButton('shuffle', 'shuffle', 'Shuffle') +
             iconButton('queue', 'playlist_add', 'Add to queue') +
+            '<span class="folderbrowser-selectall-idle">' + iconButton('selectall', 'select_all', 'Select all') + '</span>' +
+            '</div>' +
+            '<div class="folderbrowser-selection">' +
+            '<span class="folderbrowser-count"></span>' +
+            '<button type="button" class="folderbrowser-batch" data-action="batch" title="Move or delete the selected folders">' +
+            '<span class="material-icons drive_file_move" aria-hidden="true"></span><span>Move or delete…</span></button>' +
+            iconButton('selectall', 'select_all', 'Select all') +
+            iconButton('clear', 'close', 'Clear selection') +
             '</div>';
     }
 
@@ -421,28 +567,39 @@
 
     var FOLDER_ICON = '<div class="folderbrowser-thumb"><span class="material-icons folder" aria-hidden="true"></span></div>';
 
-    function folderRowHtml(item) {
+    function isSortable(item) {
+        return item.Type === 'MusicAlbum' && item.CanDelete === true;
+    }
+
+    // selectable: the list has a checkbox column; rows that can't be selected get a spacer to stay aligned.
+    function folderRowHtml(item, selectable) {
         var tag = item.ImageTags && item.ImageTags.Primary;
-        var lead = tag
-            ? '<div class="folderbrowser-thumb" style="background-image:url(\'' +
-                esc(api().getScaledImageUrl(item.Id, { type: 'Primary', maxHeight: 120, tag: tag })) + '\')"></div>'
-            : FOLDER_ICON;
+        var sortable = selectable && isSortable(item);
+        var lead = (selectable
+            ? (sortable
+                ? '<input type="checkbox" class="folderbrowser-check" data-action="select" aria-label="Select ' + esc(displayName(item)) + '">'
+                : '<span class="folderbrowser-check-spacer"></span>')
+            : '') +
+            (tag
+                ? '<div class="folderbrowser-thumb" style="background-image:url(\'' +
+                    esc(api().getScaledImageUrl(item.Id, { type: 'Primary', maxHeight: 120, tag: tag })) + '\')"></div>'
+                : FOLDER_ICON);
         var secondary = item.Type === 'MusicAlbum'
             ? [item.AlbumArtist, item.ProductionYear].filter(Boolean).join(' · ')
             : '';
         var buttons = iconButton('play', 'play_arrow', 'Play') +
             iconButton('queue', 'playlist_add', 'Add to queue') +
             (item.Type === 'MusicAlbum' ? iconButton('album', 'album', 'Open album page') : '') +
-            (item.Type === 'MusicAlbum' && item.CanDelete && folderSorter()
-                ? iconButton('sort', 'drive_file_move', 'Move or delete folder (Folder Sorter)')
-                : '');
-        return rowHtml('data-kind="folder" data-id="' + esc(item.Id) + '"', lead, displayName(item), secondary, buttons);
+            (sortable ? iconButton('sort', 'drive_file_move', 'Move or delete folder (Folder Sorter)') : '');
+        return rowHtml('data-kind="folder" data-id="' + esc(item.Id) + '"' + (sortable ? ' data-selectable' : ''),
+            lead, displayName(item), secondary, buttons);
     }
 
-    function subfolderRowHtml(sub, subPath) {
+    function subfolderRowHtml(sub, subPath, selectable) {
         var count = sub.trackCount === 1 ? '1 track' : sub.trackCount + ' tracks';
         var buttons = iconButton('play', 'play_arrow', 'Play') + iconButton('queue', 'playlist_add', 'Add to queue');
-        return rowHtml('data-kind="sub" data-sub="' + esc(subPath) + '"', FOLDER_ICON, sub.name, count, buttons);
+        var lead = (selectable ? '<span class="folderbrowser-check-spacer"></span>' : '') + FOLDER_ICON;
+        return rowHtml('data-kind="sub" data-sub="' + esc(subPath) + '"', lead, sub.name, count, buttons);
     }
 
     function trackRowHtml(item) {
@@ -472,16 +629,14 @@
         var kind = row.getAttribute('data-kind');
         var id = row.getAttribute('data-id');
 
+        if (action === 'select') {
+            toggleSelection(row, button.checked, e.shiftKey);
+            return;
+        }
+
         if (kind === 'folder') {
             if (action === 'sort') {
-                var sorter = folderSorter();
-                if (sorter) {
-                    sorter.showMenu(button, id).then(function (result) {
-                        if (result === 'done') {
-                            rerender();
-                        }
-                    });
-                }
+                sortFolders(button, [id]);
             } else if (action === 'album') {
                 location.hash = '#/details?id=' + encodeURIComponent(id) + '&serverId=' + encodeURIComponent(api().serverId());
             } else if (action === 'play') {
@@ -564,16 +719,8 @@
         return sorter && typeof sorter.showMenu === 'function' ? sorter : null;
     }
 
-    // Draws the current folder again, e.g. after a release was moved out of it.
-    function rerender() {
-        document.querySelectorAll('.' + ROOT_CLASS).forEach(function (root) {
-            root.removeAttribute('data-key');
-        });
-        scheduleSync();
-    }
-
     // Folder Sorter's script may load after a folder was already drawn.
-    document.addEventListener('foldersorter:ready', rerender);
+    document.addEventListener('foldersorter:ready', refresh);
     window.addEventListener('hashchange', scheduleSync);
     window.addEventListener('popstate', scheduleSync);
     new MutationObserver(scheduleSync).observe(document.body || document.documentElement, { childList: true, subtree: true });

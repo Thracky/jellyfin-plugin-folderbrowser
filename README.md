@@ -27,13 +27,24 @@ Target: **Jellyfin 12.2** (server and the bundled web client). No fork of jellyf
   | Folder rows | Play, Add to queue; albums also have **Open album page**, plus **Move or delete folder** when Folder Sorter is installed |
   | Track rows | Click to play the folder from that track; Add to queue |
 
-- **Optional Folder Sorter integration:** if the
-  [Folder Sorter](../jellyfin-plugin-foldersorter) plugin is installed, album rows you are allowed to delete get
-  a **Move or delete folder** button (`drive_file_move` icon). It opens Folder Sorter's *Move to …* /
-  *Delete folder* menu, and the list refreshes after a successful move or delete.
-  - Without Folder Sorter the button is simply not shown; nothing else changes.
-  - The button is only on album rows. Folder Sorter works on whole releases, so it isn't offered for plain
-    folders, disc/bonus subfolders or single tracks.
+- **Optional Folder Sorter integration:** everything below needs the
+  [Folder Sorter](../jellyfin-plugin-foldersorter) plugin, version 2 or later of its browser API. Without
+  Folder Sorter none of it is shown and nothing else changes.
+  - **Per-folder button:** album rows you are allowed to delete get a **Move or delete folder** button
+    (`drive_file_move` icon). It opens Folder Sorter's *Move to …* / *Delete folder* menu.
+  - **Batch actions:**
+    - the same album rows get a checkbox. Shift-click ticks or clears the whole range since the last
+      checkbox you clicked;
+    - **Select all** in the toolbar ticks every album row in the folder;
+    - once something is selected, the toolbar shows *N selected*, **Move or delete…**, **Select all** and
+      **Clear**. **Move or delete…** runs one Folder Sorter action on all selected folders;
+    - if some fail, one alert lists them with the reason, and they stay selected so you can retry or deal
+      with them.
+  - **Position kept:** after a move or delete the list redraws in place, so you stay at the same place in
+    it. The handled folders simply disappear from the list. If the folder you were looking at became empty
+    and was removed, the view goes up to its parent.
+  - **Only whole releases:** the button and checkbox are only on album rows. Folder Sorter works on whole
+    releases, so they aren't offered for plain folders, disc/bonus subfolders or single tracks.
   - The album page's ⋮ menu also has Folder Sorter's entries, as everywhere else.
 
 ## How it works
