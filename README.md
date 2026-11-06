@@ -19,6 +19,17 @@ Target: **Jellyfin 12.2** (server and the bundled web client). No fork of jellyf
   Playback uses the same order.
 - **Breadcrumb navigation**, and every level is a browser history entry, so **Back** goes up one level and
   links to a folder can be bookmarked.
+- **Filter box** next to the breadcrumb:
+  - it narrows the current folder's rows by name as you type. It ignores case and accents (`bjork` finds
+    `Björk`), and every word must match (`release 012`);
+  - it shows *N of M* while active;
+  - `/` focuses it, Esc clears it, and Enter scrolls to the first match;
+  - the text is kept in the URL (`q=`), so after opening a folder, **Back** returns to the filtered list.
+    Opening a folder starts unfiltered.
+- **A–Z strip** on the right edge for lists of 20 or more visible rows:
+  - `#` covers names starting with a digit or symbol; letters with no matching row are dimmed;
+  - clicking a letter scrolls to the first row starting with it and briefly highlights that row;
+  - it follows the filter.
 - **Actions:**
 
   | Where | Actions |
@@ -35,7 +46,10 @@ Target: **Jellyfin 12.2** (server and the bundled web client). No fork of jellyf
   - **Batch actions:**
     - the same album rows get a checkbox. Shift-click ticks or clears the whole range since the last
       checkbox you clicked;
-    - **Select all** in the toolbar ticks every album row in the folder;
+    - **Select all** in the toolbar ticks every album row in the folder, or only the visible ones while a
+      filter is active. Shift-click ranges also cover visible rows only;
+    - selected rows that a later filter hides stay selected. The toolbar then reads *N selected (M hidden by
+      filter)*, because a batch action still includes them;
     - once something is selected, the toolbar shows *N selected*, **Move or delete…**, **Select all** and
       **Clear**. **Move or delete…** runs one Folder Sorter action on all selected folders;
     - if some fail, one alert lists them with the reason, and they stay selected so you can retry or deal
@@ -136,7 +150,8 @@ To update, replace the folder's contents and restart. To uninstall, delete the f
 1. Open a music library.
 2. Click the view title (**Albums ▾**) and choose **Folders**.
 3. Click a folder row to open it, or a breadcrumb to jump back up.
-4. Click **Folders ▾** in the toolbar to return to the library's normal views.
+4. In large folders, type in the filter box or use the A–Z strip on the right.
+5. Click **Folders ▾** in the toolbar to return to the library's normal views.
 
 ## HTTP API
 

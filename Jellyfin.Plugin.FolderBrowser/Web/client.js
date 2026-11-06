@@ -36,10 +36,13 @@
     // sub: '/'-separated folder below the item's folder. Jellyfin models an album as one item whose tracks are
     // all direct children, even when they sit in "Disc 1/", "Bonus/" and so on, so those folders are rebuilt
     // from the track paths and addressed by item id + relative path.
+    // The filter text lives in the URL too (q=…, written with replaceState) so Back returns to the filtered
+    // list; opening another folder starts unfiltered.
     function folderHash(folderId, sub) {
         var route = currentRoute();
         var params = route ? route.params : new URLSearchParams();
         params.set(PARAM, folderId);
+        params.delete('q');
         if (sub) {
             params.set('sub', sub);
         } else {
@@ -64,6 +67,7 @@
         }
         route.params.delete(PARAM);
         route.params.delete('sub');
+        route.params.delete('q');
         location.hash = hashFor(route.params);
     }
 
@@ -71,6 +75,16 @@
         var div = document.createElement('div');
         div.textContent = value == null ? '' : String(value);
         return div.innerHTML.replace(/"/g, '&quot;');
+    }
+
+    // Lower-case, accents removed: "Björk – Vespertine" matches "bjork".
+    function searchKey(value) {
+        return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    }
+
+    function letterOf(key) {
+        var c = key.charAt(0);
+        return c >= 'a' && c <= 'z' ? c.toUpperCase() : '#';
     }
 
     function baseName(path) {
@@ -150,10 +164,29 @@
         '.folderbrowser-check-spacer { width: 1.2em; margin: 0 1em 0 .2em; flex-shrink: 0; }' +
         '.folderbrowser-row.selected { background: rgba(128,128,128,.15); }' +
         '.folderbrowser-toolbar:not(.can-select) .folderbrowser-selectall-idle { display: none; }' +
-        '.folderbrowser-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .2em; margin: 0 0 .75em .3em; opacity: .9; }' +
+        '.folderbrowser-bar { display: flex; align-items: center; flex-wrap: wrap; gap: .5em 1em; margin: 0 0 .75em; }' +
+        '.folderbrowser-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .2em; margin-left: .3em; opacity: .9; flex: 1; min-width: 0; }' +
         '.folderbrowser-crumbs a { color: inherit; cursor: pointer; text-decoration: none; }' +
         '.folderbrowser-crumbs a:hover { text-decoration: underline; }' +
         '.folderbrowser-crumbs .current { font-weight: 600; }' +
+        '.folderbrowser-filter { display: flex; align-items: center; gap: .3em; background: rgba(128,128,128,.15);' +
+        ' border-radius: .3em; padding: .15em .3em .15em .6em; min-width: 16em; }' +
+        '.folderbrowser-filter:focus-within { background: rgba(128,128,128,.25); }' +
+        '.folderbrowser-filter .material-icons { opacity: .6; font-size: 1.2em; }' +
+        '.folderbrowser-filter input { background: none; border: 0; outline: none; color: inherit; font: inherit; flex: 1; min-width: 6em; padding: .35em 0; }' +
+        '.folderbrowser-filter-count { opacity: .7; font-size: .9em; white-space: nowrap; }' +
+        '.folderbrowser-filter-clear { background: none; border: 0; color: inherit; cursor: pointer; padding: .1em; display: flex; }' +
+        '.folderbrowser-filter:not(.active) .folderbrowser-filter-clear, .folderbrowser-filter:not(.active) .folderbrowser-filter-count { display: none; }' +
+        '.folderbrowser-row.folderbrowser-hidden { display: none !important; }' +
+        '.folderbrowser-row.folderbrowser-flash { background: rgba(0,164,220,.3); }' +
+        '.folderbrowser-az { position: fixed; right: .3em; top: 55%; transform: translateY(-50%); z-index: 5; display: flex;' +
+        ' flex-direction: column; font-size: min(.8em, 2.4vh); }' +
+        '.folderbrowser-root:not(.with-az) .folderbrowser-az { display: none; }' +
+        '.folderbrowser-root.with-az { padding-right: 2.6em !important; }' +
+        '.folderbrowser-az button { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: .08em .45em;' +
+        ' line-height: 1.2; border-radius: .2em; }' +
+        '.folderbrowser-az button:hover:not(:disabled) { background: rgba(128,128,128,.3); }' +
+        '.folderbrowser-az button:disabled { opacity: .25; cursor: default; }' +
         // Rows outside the viewport are not laid out or painted; large folders only cost what is on screen.
         '.folderbrowser-row { cursor: pointer; content-visibility: auto; contain-intrinsic-size: auto 4.5em; }' +
         '.folderbrowser-thumb { width: 3em; height: 3em; flex-shrink: 0; object-fit: cover;' +
@@ -297,7 +330,7 @@
         } else if (action === 'batch') {
             sortFolders(button, selectedIds());
         } else if (action === 'selectall') {
-            document.querySelectorAll('.' + ROOT_CLASS + ' .folderbrowser-row[data-selectable]').forEach(function (row) {
+            document.querySelectorAll('.' + ROOT_CLASS + ' .folderbrowser-row[data-selectable]:not(.folderbrowser-hidden)').forEach(function (row) {
                 selection[row.getAttribute('data-id')] = true;
             });
             updateSelectionUi();
@@ -312,21 +345,30 @@
 
     var selection = {}; // album id -> true, for the folder currently shown
     var lastChecked = null; // id of the last row ticked, for shift-click ranges
-    var selectableCount = 0; // album rows with a checkbox in the current list
+    var selectableCount = 0; // album rows with a checkbox that the filter currently shows
+    var hiddenSelected = 0; // selected rows the filter currently hides
 
     function selectedIds() {
         return Object.keys(selection);
     }
 
-    // Brings the rows in line with `selection`. Called only after a render or a selection change: it walks
-    // every row, so it must never run on a timer or from the DOM observer.
+    // Brings the rows in line with `selection`. Called only after a render, a filter change or a selection
+    // change: it walks every row, so it must never run on a timer or from the DOM observer.
     function updateSelectionUi() {
         var rows = document.querySelectorAll('.' + ROOT_CLASS + ' .folderbrowser-row[data-selectable]');
         var present = {};
+        selectableCount = 0;
+        hiddenSelected = 0;
         rows.forEach(function (row) {
             var id = row.getAttribute('data-id');
             present[id] = true;
             var checked = selection[id] === true;
+            var hidden = row.classList.contains('folderbrowser-hidden');
+            if (!hidden) {
+                selectableCount++;
+            } else if (checked) {
+                hiddenSelected++;
+            }
             if (row.classList.contains('selected') !== checked) {
                 row.classList.toggle('selected', checked);
             }
@@ -341,7 +383,6 @@
                 delete selection[id];
             }
         });
-        selectableCount = rows.length;
         updateToolbarState();
     }
 
@@ -358,7 +399,8 @@
             toolbar.classList.toggle('can-select', selectableCount > 0);
         }
         var label = toolbar.querySelector('.folderbrowser-count');
-        var text = count + ' selected';
+        // Batch actions include selected rows the filter hides; say so rather than surprise anyone.
+        var text = count + ' selected' + (hiddenSelected ? ' (' + hiddenSelected + ' hidden by filter)' : '');
         if (label.textContent !== text) {
             label.textContent = text;
         }
@@ -367,7 +409,7 @@
     function toggleSelection(row, checked, range) {
         var id = row.getAttribute('data-id');
         if (range && lastChecked) {
-            var rows = Array.prototype.slice.call(document.querySelectorAll('.' + ROOT_CLASS + ' .folderbrowser-row[data-selectable]'));
+            var rows = Array.prototype.slice.call(document.querySelectorAll('.' + ROOT_CLASS + ' .folderbrowser-row[data-selectable]:not(.folderbrowser-hidden)'));
             var ids = rows.map(function (r) { return r.getAttribute('data-id'); });
             var from = ids.indexOf(lastChecked);
             var to = ids.indexOf(id);
@@ -477,8 +519,15 @@
     function render(root, folderId, libraryId, sub, refresh) {
         var token = ++renderToken;
         if (!refresh) {
-            root.innerHTML = '<div class="folderbrowser-crumbs"></div>' +
-                '<div class="folderbrowser-list"><div class="folderbrowser-empty">Loading…</div></div>';
+            root.innerHTML = '<div class="folderbrowser-bar"><div class="folderbrowser-crumbs"></div>' +
+                '<label class="folderbrowser-filter"><span class="material-icons search" aria-hidden="true"></span>' +
+                '<input type="text" placeholder="Filter this folder" title="Filter this folder (press / to focus, Esc to clear)" aria-label="Filter this folder" autocomplete="off" spellcheck="false">' +
+                '<span class="folderbrowser-filter-count"></span>' +
+                '<button type="button" class="folderbrowser-filter-clear" title="Clear filter (Esc)">' +
+                '<span class="material-icons close" aria-hidden="true"></span></button></label></div>' +
+                '<div class="folderbrowser-list"><div class="folderbrowser-empty">Loading…</div></div>' +
+                '<nav class="folderbrowser-az" aria-label="Jump to letter">' + azButtonsHtml() + '</nav>';
+            initFilter(root);
         }
 
         var uid = api().getCurrentUserId();
@@ -528,8 +577,10 @@
                     ? folderRowHtml(f.item, selectable)
                     : subfolderRowHtml(f.sub, subParts.concat(f.sub.name).join('/'), selectable);
             }).join('');
-            root.querySelector('.folderbrowser-list').innerHTML = html || '<div class="folderbrowser-empty">This folder is empty.</div>';
-            updateSelectionUi();
+            root.querySelector('.folderbrowser-list').innerHTML = html
+                ? html + '<div class="folderbrowser-empty folderbrowser-nomatch" hidden></div>'
+                : '<div class="folderbrowser-empty">This folder is empty.</div>';
+            applyFilter(root);
         }).catch(function (err) {
             if (token !== renderToken) {
                 return;
@@ -581,11 +632,180 @@
     }
 
     function rowHtml(attributes, lead, name, secondary, buttons) {
-        return '<div class="listItem listItem-border folderbrowser-row" ' + attributes + '>' + lead +
+        var key = searchKey(name);
+        return '<div class="listItem listItem-border folderbrowser-row" ' + attributes +
+            ' data-match="' + esc(key) + '" data-letter="' + letterOf(key) + '">' + lead +
             '<div class="listItemBody"><div class="listItemBodyText">' + esc(name) + '</div>' +
             (secondary ? '<div class="listItemBodyText secondary">' + esc(secondary) + '</div>' : '') +
             '</div>' + buttons + '</div>';
     }
+
+    // ---------- filter and A–Z ----------
+
+    var LETTERS = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    var AZ_MIN_ROWS = 20; // smaller lists fit on a screen or two and don't need the strip
+
+    function azButtonsHtml() {
+        return LETTERS.map(function (l) {
+            return '<button type="button" data-az="' + l + '" title="Jump to ' + (l === '#' ? 'numbers and symbols' : l) + '">' + l + '</button>';
+        }).join('');
+    }
+
+    function filterInput(root) {
+        return root.querySelector('.folderbrowser-filter input');
+    }
+
+    function initFilter(root) {
+        var input = filterInput(root);
+        var route = currentRoute();
+        input.value = (route && route.params.get('q')) || '';
+        var timer = null;
+        input.addEventListener('input', function () {
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+                applyFilter(root);
+                saveFilter(input.value);
+            }, 120);
+        });
+        input.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                if (input.value) {
+                    setFilter(root, '');
+                } else {
+                    input.blur();
+                }
+            } else if (e.key === 'Enter') {
+                // Enter scrolls to the first match (useful after scrolling away from it).
+                e.preventDefault();
+                var first = root.querySelector('.folderbrowser-row:not(.folderbrowser-hidden)');
+                if (first) {
+                    scrollToRow(first);
+                }
+            }
+        });
+        root.querySelector('.folderbrowser-filter-clear').addEventListener('click', function (e) {
+            e.preventDefault();
+            setFilter(root, '');
+            input.focus();
+        });
+    }
+
+    function setFilter(root, value) {
+        filterInput(root).value = value;
+        applyFilter(root);
+        saveFilter(value);
+    }
+
+    // replaceState instead of location.replace: the router doesn't react, so the page isn't re-rendered for
+    // every keystroke. The existing history.state is kept because the router relies on it.
+    function saveFilter(value) {
+        var route = currentRoute();
+        if (!route || route.path !== ROUTE) {
+            return;
+        }
+        if (value) {
+            route.params.set('q', value);
+        } else {
+            route.params.delete('q');
+        }
+        history.replaceState(history.state, '', hashFor(route.params));
+    }
+
+    function applyFilter(root) {
+        var input = filterInput(root);
+        if (!input) {
+            return;
+        }
+        var raw = input.value.trim();
+        var terms = searchKey(raw).split(/\s+/).filter(Boolean);
+        var rows = root.querySelectorAll('.folderbrowser-row');
+        var visible = 0;
+        rows.forEach(function (row) {
+            var key = row.getAttribute('data-match') || '';
+            var show = true;
+            for (var i = 0; i < terms.length; i++) {
+                if (key.indexOf(terms[i]) === -1) {
+                    show = false;
+                    break;
+                }
+            }
+            if (row.classList.contains('folderbrowser-hidden') === show) {
+                row.classList.toggle('folderbrowser-hidden', !show);
+            }
+            if (show) {
+                visible++;
+            }
+        });
+
+        var box = root.querySelector('.folderbrowser-filter');
+        box.classList.toggle('active', terms.length > 0);
+        box.querySelector('.folderbrowser-filter-count').textContent = visible + ' of ' + rows.length;
+        var noMatch = root.querySelector('.folderbrowser-nomatch');
+        if (noMatch) {
+            noMatch.hidden = !(terms.length && rows.length && !visible);
+            noMatch.textContent = 'Nothing in this folder matches \u201c' + raw + '\u201d.';
+        }
+        updateAz(root, visible);
+        updateSelectionUi();
+    }
+
+    function updateAz(root, visible) {
+        root.classList.toggle('with-az', visible >= AZ_MIN_ROWS);
+        var present = {};
+        root.querySelectorAll('.folderbrowser-row:not(.folderbrowser-hidden)').forEach(function (row) {
+            present[row.getAttribute('data-letter')] = true;
+        });
+        root.querySelectorAll('.folderbrowser-az button').forEach(function (b) {
+            b.disabled = !present[b.getAttribute('data-az')];
+        });
+    }
+
+    function jumpToLetter(root, letter) {
+        var row = root.querySelector('.folderbrowser-row[data-letter="' + letter + '"]:not(.folderbrowser-hidden)');
+        if (row) {
+            scrollToRow(row);
+        }
+    }
+
+    // Off-screen rows only have an estimated height (content-visibility), so the first scroll can land a little
+    // off; re-measure for a few frames until the row sits just below the fixed header.
+    function scrollToRow(row) {
+        var header = document.querySelector('.skinHeader');
+        var offset = (header ? header.getBoundingClientRect().bottom : 0) + 8;
+        var attempts = 0;
+        (function step() {
+            var delta = row.getBoundingClientRect().top - offset;
+            if (Math.abs(delta) > 2) {
+                window.scrollBy(0, delta);
+            }
+            if (Math.abs(delta) > 2 && ++attempts < 5) {
+                requestAnimationFrame(step);
+            } else {
+                row.classList.add('folderbrowser-flash');
+                setTimeout(function () { row.classList.remove('folderbrowser-flash'); }, 900);
+            }
+        })();
+    }
+
+    // "/" focuses the filter, as in many web apps, unless the user is already typing somewhere.
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || !document.documentElement.hasAttribute('data-folderbrowser')) {
+            return;
+        }
+        var t = e.target;
+        if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) {
+            return;
+        }
+        var root = document.querySelector('.' + ROOT_CLASS);
+        var input = root && filterInput(root);
+        if (input) {
+            e.preventDefault();
+            input.focus();
+            input.select();
+        }
+    }, true);
 
     var FOLDER_ICON = '<div class="folderbrowser-thumb"><span class="material-icons folder" aria-hidden="true"></span></div>';
 
@@ -635,6 +855,12 @@
         var root = e.currentTarget;
         var folderId = root.getAttribute('data-folder');
         var sub = root.getAttribute('data-sub') || '';
+
+        var letter = e.target.closest('[data-az]');
+        if (letter) {
+            jumpToLetter(root, letter.getAttribute('data-az'));
+            return;
+        }
 
         var crumb = e.target.closest('[data-crumb]');
         if (crumb) {
