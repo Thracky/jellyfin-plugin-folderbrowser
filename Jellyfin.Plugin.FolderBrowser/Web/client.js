@@ -154,8 +154,9 @@
         '.folderbrowser-crumbs a { color: inherit; cursor: pointer; text-decoration: none; }' +
         '.folderbrowser-crumbs a:hover { text-decoration: underline; }' +
         '.folderbrowser-crumbs .current { font-weight: 600; }' +
-        '.folderbrowser-row { cursor: pointer; }' +
-        '.folderbrowser-thumb { width: 3em; height: 3em; flex-shrink: 0; background-size: cover; background-position: center;' +
+        // Rows outside the viewport are not laid out or painted; large folders only cost what is on screen.
+        '.folderbrowser-row { cursor: pointer; content-visibility: auto; contain-intrinsic-size: auto 4.5em; }' +
+        '.folderbrowser-thumb { width: 3em; height: 3em; flex-shrink: 0; object-fit: cover;' +
         ' border-radius: .2em; display: flex; align-items: center; justify-content: center; margin-right: 1em; }' +
         '.folderbrowser-thumb .material-icons { font-size: 2em; opacity: .7; }' +
         '.folderbrowser-index { width: 3em; text-align: center; opacity: .7; flex-shrink: 0; margin-right: 1em; }' +
@@ -235,7 +236,9 @@
             document.querySelectorAll('.' + ROOT_CLASS + ', .folderbrowser-toolbar').forEach(function (el) { el.remove(); });
             return;
         }
-        ensureToolbar();
+        if (ensureToolbar()) {
+            updateToolbarState();
+        }
         if (!page) {
             return;
         }
@@ -258,19 +261,20 @@
             lastChecked = null;
             render(root, folderId, libraryId, sub, false);
         }
-        updateSelectionUi();
     }
 
+    // Returns true when the toolbar was (re)created, e.g. after React re-rendered the header.
     function ensureToolbar() {
         var host = document.querySelector(NATIVE_TOOLBAR);
         if (!host || host.querySelector(':scope > .folderbrowser-toolbar')) {
-            return;
+            return false;
         }
         var toolbar = document.createElement('div');
         toolbar.className = 'folderbrowser-toolbar';
         toolbar.innerHTML = toolbarHtml();
         toolbar.addEventListener('click', onToolbarClick);
         host.appendChild(toolbar);
+        return true;
     }
 
     function onToolbarClick(e) {
@@ -308,11 +312,14 @@
 
     var selection = {}; // album id -> true, for the folder currently shown
     var lastChecked = null; // id of the last row ticked, for shift-click ranges
+    var selectableCount = 0; // album rows with a checkbox in the current list
 
     function selectedIds() {
         return Object.keys(selection);
     }
 
+    // Brings the rows in line with `selection`. Called only after a render or a selection change: it walks
+    // every row, so it must never run on a timer or from the DOM observer.
     function updateSelectionUi() {
         var rows = document.querySelectorAll('.' + ROOT_CLASS + ' .folderbrowser-row[data-selectable]');
         var present = {};
@@ -320,9 +327,11 @@
             var id = row.getAttribute('data-id');
             present[id] = true;
             var checked = selection[id] === true;
-            row.classList.toggle('selected', checked);
+            if (row.classList.contains('selected') !== checked) {
+                row.classList.toggle('selected', checked);
+            }
             var box = row.querySelector('.folderbrowser-check');
-            if (box) {
+            if (box && box.checked !== checked) {
                 box.checked = checked;
             }
         });
@@ -332,13 +341,26 @@
                 delete selection[id];
             }
         });
+        selectableCount = rows.length;
+        updateToolbarState();
+    }
 
-        var count = selectedIds().length;
+    function updateToolbarState() {
         var toolbar = document.querySelector('.folderbrowser-toolbar');
-        if (toolbar) {
+        if (!toolbar) {
+            return;
+        }
+        var count = selectedIds().length;
+        if (toolbar.classList.contains('has-selection') !== count > 0) {
             toolbar.classList.toggle('has-selection', count > 0);
-            toolbar.classList.toggle('can-select', rows.length > 0);
-            toolbar.querySelector('.folderbrowser-count').textContent = count + ' selected';
+        }
+        if (toolbar.classList.contains('can-select') !== selectableCount > 0) {
+            toolbar.classList.toggle('can-select', selectableCount > 0);
+        }
+        var label = toolbar.querySelector('.folderbrowser-count');
+        var text = count + ' selected';
+        if (label.textContent !== text) {
+            label.textContent = text;
         }
     }
 
@@ -581,8 +603,8 @@
                 : '<span class="folderbrowser-check-spacer"></span>')
             : '') +
             (tag
-                ? '<div class="folderbrowser-thumb" style="background-image:url(\'' +
-                    esc(api().getScaledImageUrl(item.Id, { type: 'Primary', maxHeight: 120, tag: tag })) + '\')"></div>'
+                ? '<img class="folderbrowser-thumb" loading="lazy" decoding="async" alt="" src="' +
+                    esc(api().getScaledImageUrl(item.Id, { type: 'Primary', maxHeight: 120, tag: tag })) + '">'
                 : FOLDER_ICON);
         var secondary = item.Type === 'MusicAlbum'
             ? [item.AlbumArtist, item.ProductionYear].filter(Boolean).join(' · ')
@@ -723,6 +745,18 @@
     document.addEventListener('foldersorter:ready', refresh);
     window.addEventListener('hashchange', scheduleSync);
     window.addEventListener('popstate', scheduleSync);
-    new MutationObserver(scheduleSync).observe(document.body || document.documentElement, { childList: true, subtree: true });
+    // Watch the page for route/React changes, but ignore changes inside our own elements: reacting to those
+    // would schedule another sync for every update we make ourselves.
+    var OWN = '.' + ROOT_CLASS + ', .folderbrowser-toolbar';
+    new MutationObserver(function (records) {
+        for (var i = 0; i < records.length; i++) {
+            var target = records[i].target;
+            var el = target.nodeType === 1 ? target : target.parentElement;
+            if (!el || !el.closest(OWN)) {
+                scheduleSync();
+                return;
+            }
+        }
+    }).observe(document.body || document.documentElement, { childList: true, subtree: true });
     sync();
 })();
